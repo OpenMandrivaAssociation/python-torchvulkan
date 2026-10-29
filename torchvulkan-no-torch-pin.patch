@@ -9,10 +9,10 @@ enable_language(HIP) and find_package()s the whole math stack. The
 extension is host C++. Point Torch_DIR at share/cmake/Torch and link
 the libraries in that tree.
 
-slangc -O1 and -O2 run SPIRV-Tools inside slang 2026.18 and die with
-"ID overflow" on some variants (SPIRV-Tools 2026.4). -O0 skips that
-pass. Standalone spirv-opt -O compacts ids; spirv-val accepts every
-variant.
+shader-slang 2026.18.3-2 links slang-glslang to the SPIRV-Tools
+options ABI it was built with, so slangc -O2 is safe. Earlier
+2026.18 builds bound that C API at libglslang and died with
+"ID overflow" on some variants.
 
 install.strip is off so rpm can own the debuginfo.
 
@@ -36,7 +36,7 @@ install.strip is off so rpm can own the debuginfo.
  sdist.include = ["torchvulkan/_version.py"] 
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -1,10 +1,26 @@
+@@ -1,10 +1,25 @@
  cmake_minimum_required(VERSION 3.18)
  project(torchvulkan LANGUAGES CXX)
  
@@ -60,11 +60,10 @@ install.strip is off so rpm can own the debuginfo.
  find_package(Vulkan REQUIRED)
  find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
  find_program(SLANGC_EXE slangc HINTS "$ENV{SLANG_DIR}" REQUIRED)
-+find_program(SPIRV_OPT_EXE spirv-opt REQUIRED)
  
  set(CMAKE_CXX_STANDARD 20)
  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-@@ -22,7 +38,7 @@
+@@ -22,7 +37,7 @@
  set_target_properties(torchvulkan_lib PROPERTIES OUTPUT_NAME "_C")
  find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
  target_link_libraries(torchvulkan_lib PRIVATE ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} Python3::Module ${CMAKE_DL_LIBS})
@@ -75,17 +74,12 @@ install.strip is off so rpm can own the debuginfo.
  
 --- a/src/shaders/CMakeLists.txt
 +++ b/src/shaders/CMakeLists.txt
-@@ -37,7 +37,12 @@
+@@ -37,7 +37,7 @@
  
      add_custom_command(
          OUTPUT ${SPV_OUT}
 -        COMMAND ${SLANGC_EXE} ${SOURCE} -entry ${ENTRY} ${SPECIALIZE_ARGS} -target spirv -capability SPV_KHR_cooperative_matrix+SPV_EXT_physical_storage_buffer -I ${CMAKE_SOURCE_DIR}/src/shaders -g0 -Wno-39001 -o ${SPV_OUT}
-+        # slangc -O1/-O2 runs SPIRV-Tools inside slang 2026.18 and dies
-+        # with "ID overflow" on some variants. -O0 skips that pass.
-+        # Standalone spirv-opt -O compacts ids.
-+        COMMAND ${SLANGC_EXE} ${SOURCE} -entry ${ENTRY} ${SPECIALIZE_ARGS} -target spirv -capability SPV_KHR_cooperative_matrix+SPV_EXT_physical_storage_buffer -I ${CMAKE_SOURCE_DIR}/src/shaders -g0 -Wno-39001 -O0 -o ${SPV_OUT}.unopt
-+        COMMAND ${SPIRV_OPT_EXE} -O ${SPV_OUT}.unopt -o ${SPV_OUT}
-+        COMMAND ${CMAKE_COMMAND} -E rm -f ${SPV_OUT}.unopt
++        COMMAND ${SLANGC_EXE} ${SOURCE} -entry ${ENTRY} ${SPECIALIZE_ARGS} -target spirv -capability SPV_KHR_cooperative_matrix+SPV_EXT_physical_storage_buffer -I ${CMAKE_SOURCE_DIR}/src/shaders -g0 -Wno-39001 -O2 -o ${SPV_OUT}
          DEPENDS ${SOURCE} ${SHADER_MODULES}
          COMMENT "Compiling shader ${NAME}"
      )

@@ -7,7 +7,7 @@ Group:		Development/Python
 URL:		https://github.com/ZainSharief/torchvulkan
 Source0:	https://github.com/ZainSharief/torchvulkan/archive/refs/tags/v%{version}.tar.gz#/torchvulkan-%{version}.tar.gz
 # Drop the torch==2.13.0 build pin, link the system torch without
-# LoadHIP, and optimize shaders with spirv-opt instead of slangc -O.
+# LoadHIP, and compile shaders with slangc -O2.
 Patch0:		torchvulkan-no-torch-pin.patch
 
 BuildRequires:	python
@@ -22,10 +22,9 @@ BuildRequires:	python%{pyver}dist(wheel)
 # Private headers (torch/csrc/Generator.h). Rebuild when the torch
 # C++ ABI changes. 2.15 is the first cooker torch this is built for.
 BuildRequires:	python%{pyver}dist(torch) >= 2.15
-# slangc compiles the Slang kernels to SPIR-V at build time.
-# spirv-opt optimizes them. slangc -O1/-O2 overflows SPIR-V ids.
-BuildRequires:	shader-slang
-BuildRequires:	/usr/bin/spirv-opt
+# slangc -O2 compiles the Slang kernels to SPIR-V. Needs
+# shader-slang 2026.18.3-2, which fixes the optimizer options ABI.
+BuildRequires:	shader-slang >= 2026.18.3-2
 BuildRequires:	pkgconfig(vulkan)
 
 # volk dlopens libvulkan.so.1. The ELF generator does not see that.
