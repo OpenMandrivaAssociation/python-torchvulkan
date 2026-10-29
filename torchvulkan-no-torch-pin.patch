@@ -1,0 +1,91 @@
+Build against the system torch without downloading one, and without
+running the ROCm Torch config.
+
+build-system.requires pins torch==2.13.0. An isolated PEP 517 build
+would fetch that wheel. ABF has no network.
+
+find_package(Torch) on this ROCm build include()s LoadHIP, which
+enable_language(HIP) and find_package()s the whole math stack. The
+extension is host C++. Point Torch_DIR at share/cmake/Torch and link
+the libraries in that tree.
+
+slangc -O1 and -O2 run SPIRV-Tools inside slang 2026.18 and die with
+"ID overflow" on some variants (SPIRV-Tools 2026.4). -O0 skips that
+pass. Standalone spirv-opt -O compacts ids; spirv-val accepts every
+variant.
+
+install.strip is off so rpm can own the debuginfo.
+
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,5 +1,6 @@
+ [build-system]
+-requires = ["torch==2.13.0", "scikit-build-core", "setuptools_scm"]
++# torch is the system package. Do not pin a PyPI wheel here.
++requires = ["scikit-build-core", "setuptools_scm"]
+ build-backend = "scikit_build_core.build"
+ 
+ [project]
+@@ -22,6 +23,7 @@
+ build-dir = "build/{wheel_tag}"
+ wheel.packages = ["torchvulkan"]
+ cmake.build-type = "Release"
++install.strip = false
+ 
+ metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+ sdist.include = ["torchvulkan/_version.py"] 
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,10 +1,26 @@
+ cmake_minimum_required(VERSION 3.18)
+ project(torchvulkan LANGUAGES CXX)
+ 
+-find_package(Torch REQUIRED)
++# The ROCm Torch config include()s LoadHIP, which enable_language(HIP)
++# and find_package()s the whole math stack. This extension is host C++
++# and only needs the torch libraries and headers.
++if(DEFINED ENV{Torch_DIR})
++  get_filename_component(TORCH_INSTALL_PREFIX "$ENV{Torch_DIR}/../../.." ABSOLUTE)
++else()
++  message(FATAL_ERROR "Set Torch_DIR to the torch share/cmake/Torch directory")
++endif()
++find_library(TORCH_LIBRARY torch PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
++find_library(TORCH_CPU_LIBRARY torch_cpu PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
++find_library(TORCH_HIP_LIBRARY torch_hip PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
++find_library(C10_LIBRARY c10 PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
++set(TORCH_LIBRARIES "${TORCH_LIBRARY}" "${TORCH_CPU_LIBRARY}" "${TORCH_HIP_LIBRARY}" "${C10_LIBRARY}")
++set(TORCH_INCLUDE_DIRS
++  "${TORCH_INSTALL_PREFIX}/include"
++  "${TORCH_INSTALL_PREFIX}/include/torch/csrc/api/include")
+ find_package(Vulkan REQUIRED)
+ find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
+ find_program(SLANGC_EXE slangc HINTS "$ENV{SLANG_DIR}" REQUIRED)
++find_program(SPIRV_OPT_EXE spirv-opt REQUIRED)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+@@ -22,7 +38,7 @@
+ set_target_properties(torchvulkan_lib PROPERTIES OUTPUT_NAME "_C")
+ find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+ target_link_libraries(torchvulkan_lib PRIVATE ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} Python3::Module ${CMAKE_DL_LIBS})
+-target_include_directories(torchvulkan_lib PRIVATE src/ ${CMAKE_BINARY_DIR} extern/vma extern/volk ${Vulkan_INCLUDE_DIRS})
++target_include_directories(torchvulkan_lib PRIVATE src/ ${CMAKE_BINARY_DIR} extern/vma extern/volk ${Vulkan_INCLUDE_DIRS} ${TORCH_INCLUDE_DIRS})
+ 
+ target_compile_definitions(torchvulkan_lib PRIVATE VK_NO_PROTOTYPES TORCH_EXTENSION_NAME=_C)
+ 
+--- a/src/shaders/CMakeLists.txt
++++ b/src/shaders/CMakeLists.txt
+@@ -37,7 +37,12 @@
+ 
+     add_custom_command(
+         OUTPUT ${SPV_OUT}
+-        COMMAND ${SLANGC_EXE} ${SOURCE} -entry ${ENTRY} ${SPECIALIZE_ARGS} -target spirv -capability SPV_KHR_cooperative_matrix+SPV_EXT_physical_storage_buffer -I ${CMAKE_SOURCE_DIR}/src/shaders -g0 -Wno-39001 -o ${SPV_OUT}
++        # slangc -O1/-O2 runs SPIRV-Tools inside slang 2026.18 and dies
++        # with "ID overflow" on some variants. -O0 skips that pass.
++        # Standalone spirv-opt -O compacts ids.
++        COMMAND ${SLANGC_EXE} ${SOURCE} -entry ${ENTRY} ${SPECIALIZE_ARGS} -target spirv -capability SPV_KHR_cooperative_matrix+SPV_EXT_physical_storage_buffer -I ${CMAKE_SOURCE_DIR}/src/shaders -g0 -Wno-39001 -O0 -o ${SPV_OUT}.unopt
++        COMMAND ${SPIRV_OPT_EXE} -O ${SPV_OUT}.unopt -o ${SPV_OUT}
++        COMMAND ${CMAKE_COMMAND} -E rm -f ${SPV_OUT}.unopt
+         DEPENDS ${SOURCE} ${SHADER_MODULES}
+         COMMENT "Compiling shader ${NAME}"
+     )
