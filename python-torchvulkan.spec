@@ -10,6 +10,10 @@ Source0:	https://github.com/ZainSharief/torchvulkan/archive/refs/tags/v%{version
 # LoadHIP, and compile shaders with slangc -O2.
 Patch0:		torchvulkan-no-torch-pin.patch
 
+# find-debuginfo records no package sources for the LTO extension, then
+# rpm rejects the empty debugsource manifest.
+%define _empty_manifest_terminate_build 0
+
 BuildRequires:	python
 BuildRequires:	pkgconfig(python3)
 BuildRequires:	cmake
